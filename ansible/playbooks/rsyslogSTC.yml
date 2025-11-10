@@ -3,14 +3,14 @@
   hosts: STC,!DVSSTCSLG01
   tasks:
     - name: check if rsyslog is installed
-      become: yes
+      become: true
       become_user: root
       apt:
         name: rsyslog
         state: latest
 
     - name: "Searching configuration"
-      become: yes
+      become: true
       become_user: root
       tags: rsyslog
       lineinfile:
@@ -29,7 +29,7 @@
       when: presence is changed
 
     - name: rsyslog restart
-      become: yes
+      become: true
       become_user: root
       service:
         name: rsyslog
