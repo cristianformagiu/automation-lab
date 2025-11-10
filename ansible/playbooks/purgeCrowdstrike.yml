@@ -1,0 +1,15 @@
+---
+- name: Purge falcon-sensor on specified servers
+  hosts:
+    - FTC
+    - PTC
+    - WTC
+  become: yes            # Run with sudo privileges
+  tasks:
+    - name: Purge falcon-sensor package
+      apt:
+        name: falcon-sensor
+        state: absent
+        purge: yes
+        update_cache: yes
+

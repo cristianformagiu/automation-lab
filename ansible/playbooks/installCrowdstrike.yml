@@ -1,0 +1,30 @@
+- name: Install Latest.Ubuntu-16-18-20-22-24-Sensor.deb on specified servers
+  hosts:
+    - FTC
+    - PTC
+    - WTC
+  become: yes  # Run with sudo privileges
+  tasks:
+    - name: Copy the .deb package to the server (only if not present)
+      copy:
+        src: /home/vdiops/Latest.Ubuntu-16-18-20-22-24-Sensor.deb  # Replace with your local file path
+        dest: /tmp/Latest.Ubuntu-16-18-20-22-24-Sensor.deb     # Destination on the target server
+        force: no  # This ensures the file is copied only if it's not already present
+
+    - name: Install the .deb package using dpkg
+      command: dpkg -i /tmp/Latest.Ubuntu-16-18-20-22-24-Sensor.deb
+      notify:
+        - Fix missing dependencies
+
+  handlers:
+    - name: Fix missing dependencies
+      apt:
+        update_cache: yes
+        state: present
+        name: "{{ item }}"
+      loop:
+        - apt-transport-https
+        - ca-certificates
+        - curl
+      when: ansible_facts['os_family'] == 'Ubuntu'
+

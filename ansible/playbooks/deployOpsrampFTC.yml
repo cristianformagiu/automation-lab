@@ -1,0 +1,32 @@
+---
+- name: Install and configure OpsRamp agent
+  hosts: FTC
+  become: true
+  tasks:
+    - name: Copy OpsRamp agent package to remote host
+      copy:
+        src: /home/vdiops/opsramp-agent_19.0.0-1_amd64.deb
+        dest: /tmp/opsramp-agent_19.0.0-1_amd64.deb
+        mode: '0644'
+
+    - name: Install OpsRamp agent package
+      apt:
+        deb: /tmp/opsramp-agent_19.0.0-1_amd64.deb
+        state: present
+      register: dpkg_result
+
+    - name: Run OpsRamp configuration command
+      command: >
+        /opt/opsramp/agent/bin/configure
+        -K HzSZBr4bzVVmrUZxp5ZwtjN7tznnk77b
+        -S gphXrjcrJRm6nafzAXEKr7asdysdt9XwaDUm3AyMgUvubvRwBWWCJCNnwaVKckWX
+        -s pod1.api.opsramp.com
+        -F INTG-8dd640cf-cb10-426e-bb84-b157a92a1168
+        -L false
+        -m proxy
+        -x 10.92.229.149
+        -p 3128
+        -t http
+        -G 750c148d-cf24-49ae-b3c1-8ce49db4d348
+      when: dpkg_result is changed
+

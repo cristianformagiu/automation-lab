@@ -1,0 +1,14 @@
+---
+  - name: Search
+    hosts: VWS
+
+    tasks:
+      - name: check if bind9 is installed
+        become: yes
+        become_user: root
+        apt:
+          name: bind9
+          state: present
+        check_mode: true
+        register: presence
+

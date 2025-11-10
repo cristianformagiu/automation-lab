@@ -1,0 +1,11 @@
+---
+  - name: test1
+    hosts: VWS
+    tasks:
+        - name: Get hostname
+          shell: hostname
+          register: result
+
+        - name: Print the var
+          debug:
+            var: result

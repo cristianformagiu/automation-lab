@@ -1,0 +1,53 @@
+  - name: updateWTC
+    hosts: WTC,!DVS*PRX*,!SD90*PRX*
+    strategy: free
+    tasks:
+      - name: Run the equivalent of "apt-get update" as a separate step
+        become: yes
+        become_user: root
+        apt:
+          update_cache: yes
+      
+      
+      - name: Updates begin
+        become: yes
+        become_user: root
+        apt:
+          name: "*"
+          state: latest
+        check_mode: false
+        
+
+      - name: Remove dependencies that are no longer required
+        become: yes
+        become_user: root      
+        apt:
+          autoremove: yes
+
+
+  - name: Update proxys
+    hosts: DVS*PRX*,SD90*PRX*
+
+    tasks:
+      - name: Run the equivalent of "apt-get update" as a separate step
+        become: yes
+        become_user: root
+        apt:
+          update_cache: yes
+      
+      
+      - name: Updates begin
+        become: yes
+        become_user: root
+        apt:
+          name: "*"
+          state: latest
+        check_mode: false
+        
+
+      - name: Remove dependencies that are no longer required
+        become: yes
+        become_user: root      
+        apt:
+          autoremove: yes
+

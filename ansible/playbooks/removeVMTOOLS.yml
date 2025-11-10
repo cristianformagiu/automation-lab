@@ -1,0 +1,43 @@
+---
+- name: Remove legacy VMware Tools but keep open-vm-tools
+  hosts:
+    - FTC
+    - WTC
+  become: yes
+  tasks:
+    - name: Remove old VMware Tools packages
+      apt:
+        name:
+          - vmware-tools
+          - vmware-tools-services
+          - vmware-tools-foundation
+          - vmware-tools-esx
+        state: absent
+        purge: yes
+        autoremove: yes
+        update_cache: yes
+
+    - name: Ensure open-vm-tools is present
+      apt:
+        name: open-vm-tools
+        state: present
+        update_cache: yes
+
+    - name: Remove residual VMware Tools config directories
+      file:
+        path: /etc/vmware-tools
+        state: absent
+
+    - name: Verify VMware Tools removal and open-vm-tools presence
+      shell: |
+        echo "Installed VMware-related packages:"
+        dpkg -l | grep -i vmware || echo "No legacy VMware Tools found"
+        echo ""
+        echo "open-vm-tools status:"
+        dpkg -l | grep open-vm-tools
+      register: vmtools_status
+      changed_when: false
+
+    - debug:
+        msg: "{{ vmtools_status.stdout_lines }}"
+

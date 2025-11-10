@@ -1,0 +1,17 @@
+- name: Configure and Restart CrowdStrike Falcon Sensor on specified servers
+  hosts:
+    - FTC
+    - PTC
+    - WTC
+  become: yes  # Run with sudo privileges
+  tasks:
+    - name: Run CrowdStrike FalconCTL command to configure the sensor
+      command: /opt/CrowdStrike/falconctl -s --cid=8A5E67F5417D4692A4A3E98532C46036-E5 --provisioning-token=AEFEA3F9
+      ignore_errors: yes  # If you want to ignore errors, remove this line if you want it to fail on error
+
+    - name: Restart the Falcon Sensor service
+      service:
+        name: falcon-sensor
+        state: restarted
+      ignore_errors: yes  # Again, optional based on error handling preference
+

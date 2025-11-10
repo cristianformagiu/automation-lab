@@ -1,0 +1,116 @@
+---
+- name: Deploy OpenSSH 10.0p1 from tarball
+  hosts: WTC
+  become: yes
+  vars:
+    openssh_version: "10.0p1"
+    # Path to the tar.gz on the **control** machine (this server)
+    openssh_src_tarball: "/home/vdiops/openssh-10.0p1.tar.gz"
+    build_root: "/usr/local/src"
+    install_prefix: "/usr/local"
+    build_dir: "{{ build_root }}/openssh-{{ openssh_version }}"
+    configure_args:
+      - "--prefix={{ install_prefix }}"
+      - "--sysconfdir=/etc/ssh"
+      - "--with-privsep-path=/var/lib/sshd"
+      - "--with-pam"
+      # Uncomment if you want GSSAPI/Kerberos support:
+      # - "--with-kerberos5=/usr"
+  pre_tasks:
+    - name: Ensure build dependencies are present
+      apt:
+        update_cache: yes
+        state: present
+        pkg:
+          - build-essential
+          - pkg-config
+          - zlib1g-dev
+          - libssl-dev
+          - libpam0g-dev
+          - libselinux1-dev
+          - libedit-dev
+          - libfido2-dev
+          - libldns-dev
+          # Optional for GSSAPI/Kerberos:
+          # - libkrb5-dev
+
+    - name: Create build root
+      file:
+        path: "{{ build_root }}"
+        state: directory
+        mode: "0755"
+
+  tasks:
+    - name: Copy OpenSSH source tarball to target
+      copy:
+        src: "{{ openssh_src_tarball }}"
+        dest: "{{ build_root }}/"
+        mode: "0644"
+
+    - name: Unpack OpenSSH tarball
+      unarchive:
+        src: "{{ build_root }}/{{ openssh_src_tarball | basename }}"
+        dest: "{{ build_root }}/"
+        remote_src: yes
+        creates: "{{ build_dir }}/configure"
+
+    - name: Configure build
+      command: ./configure {{ configure_args | join(' ') }}
+      args:
+        chdir: "{{ build_dir }}"
+      register: cfg
+      changed_when: "'creating Makefile' in cfg.stdout or cfg.rc == 0"
+
+    - name: Compile
+      command: make -j"{{ ansible_processor_vcpus | default(2) }}"
+      args:
+        chdir: "{{ build_dir }}"
+
+    - name: Install
+      command: make install
+      args:
+        chdir: "{{ build_dir }}"
+      notify: Restart ssh
+
+    - name: Backup distro sshd binary if not already backed up
+      shell: |
+        if [ -x /usr/sbin/sshd ] && [ ! -e /usr/sbin/sshd.distro ]; then
+          cp -a /usr/sbin/sshd /usr/sbin/sshd.distro
+        fi
+      args:
+        executable: /bin/bash
+
+    - name: Point system sshd at the new binary
+      file:
+        src: "{{ install_prefix }}/sbin/sshd"
+        dest: /usr/sbin/sshd
+        state: link
+        force: true
+
+    - name: Validate sshd configuration (syntax check)
+      command: "{{ install_prefix }}/sbin/sshd -t"
+      register: sshd_check
+      changed_when: false
+
+    - name: Show validation output (if any)
+      debug:
+        var: sshd_check.stdout_lines
+
+    - name: Verify version
+      command: ssh -V
+      register: ssh_ver
+      changed_when: false
+      failed_when: false  # ssh client may still be the distro one; that's OK
+
+    - name: Print version info
+      debug:
+        msg: "{{ ssh_ver.stderr | default(ssh_ver.stdout) | default('ssh -V produced no output') }}"
+
+  handlers:
+    - name: Restart ssh
+      systemd:
+        name: ssh
+        state: restarted
+        enabled: yes
+        daemon_reload: yes
+

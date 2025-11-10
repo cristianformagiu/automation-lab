@@ -1,0 +1,18 @@
+---
+- name: Reboot Ubuntu servers
+  hosts:
+    - FTC
+    - WTC,!localhost
+  become: true
+  tasks:
+    - name: Reboot the server
+      reboot:
+        reboot_timeout: 600  # Timeout in seconds, adjust if needed
+        test_command: whoami  # Command to test if the system is back up
+      register: reboot_result
+
+    - name: Check reboot result
+      debug:
+        msg: "Reboot was successful for {{ inventory_hostname }}"
+      when: reboot_result is successful
+

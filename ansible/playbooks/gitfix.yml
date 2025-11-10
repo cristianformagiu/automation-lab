@@ -1,0 +1,31 @@
+---
+  - name: Search
+    hosts: VWS
+
+    tasks:
+      - name: check if git is installed
+        become: yes
+        become_user: root
+        apt:
+          name: git
+          state: present
+        check_mode: true
+        register: presence
+        failed_when: presence is changed
+
+      - name: check if software-properties-common is installed
+        become: yes
+        become_user: root
+        apt:
+          name: software-properties-common
+          state: latest
+          install_recommends: yes
+
+
+
+      - name: check latest if presence is not changed
+        become: yes
+        become_user: root
+        apt:
+          name: git
+          state: latest
