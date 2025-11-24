@@ -1,0 +1,105 @@
+---
+- name: Upgrade Squid from 5.9 to 7.2
+  hosts: DVSFTCPRX01
+  become: true
+  gather_facts: no
+
+  vars:
+    target_ver: "7.2"
+    squid_pkg_rev: "1"
+    squid_pkg: "{{ target_ver }}-{{ squid_pkg_rev }}"
+    build_dir: /usr/local/src/squid-build
+    build_user: squidbuild
+    debian_pool: "https://deb.debian.org/debian/pool/main/s/squid"
+
+  tasks:
+    - name: Read current version
+      shell: "squid -v | head -n1 | awk '{print $NF}' || true"
+      register: cur_ver
+      changed_when: false
+
+    - meta: end_host
+      when: cur_ver.stdout == target_ver
+
+    - name: Stop squid
+      service:
+        name: squid
+        state: stopped
+      ignore_errors: true
+
+    - name: Install build deps
+      apt:
+        update_cache: true
+        name:
+          - dpkg-dev
+          - debhelper
+          - build-essential
+          - fakeroot
+          - devscripts
+          - wget
+          - ca-certificates
+          - libssl-dev
+        state: present
+
+    - name: Ensure build user exists
+      user:
+        name: "{{ build_user }}"
+        shell: /bin/bash
+
+    - name: Prepare build directory
+      file:
+        path: "{{ build_dir }}"
+        state: directory
+        owner: "{{ build_user }}"
+        group: "{{ build_user }}"
+
+    - name: Download Squid 7.2 source
+      become_user: "{{ build_user }}"
+      shell: |
+        set -e
+        cd "{{ build_dir }}"
+        rm -rf build
+        mkdir build && cd build
+        wget -q "{{ debian_pool }}/squid_{{ squid_pkg }}.dsc"
+        wget -q "{{ debian_pool }}/squid_{{ target_ver }}.orig.tar.xz"
+        wget -q "{{ debian_pool }}/squid_{{ squid_pkg }}.debian.tar.xz"
+      args:
+        executable: /bin/bash
+
+    - name: Unpack source
+      become_user: "{{ build_user }}"
+      shell: |
+        cd "{{ build_dir }}/build"
+        dpkg-source -x "squid_{{ squid_pkg }}.dsc"
+      args:
+        executable: /bin/bash
+
+    - name: Build .deb packages
+      become_user: "{{ build_user }}"
+      shell: |
+        cd "{{ build_dir }}/build/squid-{{ target_ver }}"
+        dpkg-buildpackage -rfakeroot -b -us -uc
+      args:
+        executable: /bin/bash
+
+    - name: Install Squid 7.2
+      shell: |
+        cd "{{ build_dir }}/build"
+        dpkg -i squid-common_{{ squid_pkg }}_all.deb
+        dpkg -i squid_{{ squid_pkg }}_amd64.deb || apt-get -f -y install
+      args:
+        executable: /bin/bash
+
+    - name: Start squid
+      service:
+        name: squid
+        state: started
+        enabled: true
+
+    - name: Verify
+      command: squid -v
+      register: out
+      changed_when: false
+
+    - debug:
+        msg: "{{ out.stdout_lines }}"
