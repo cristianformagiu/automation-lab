@@ -1,0 +1,24 @@
+---
+- name: Check Squid version on Ubuntu
+  hosts: all
+  gather_facts: no
+
+  tasks:
+    - name: Find squid binary
+      ansible.builtin.shell: "command -v squid || command -v squid3"
+      register: squid_bin
+      changed_when: false
+
+    - name: Fail if Squid not installed
+      ansible.builtin.fail:
+        msg: "Squid not found on this host"
+      when: squid_bin.stdout == ""
+
+    - name: Get Squid version
+      ansible.builtin.shell: "{{ squid_bin.stdout }} -v"
+      register: squid_version
+      changed_when: false
+
+    - name: Show version
+      ansible.builtin.debug:
+        msg: "{{ squid_version.stdout }}"
