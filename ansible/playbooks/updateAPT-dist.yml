@@ -1,0 +1,240 @@
+---
+# ===== Global defaults & helpers =====
+# Run in small rolling batches, abort if too many fail.
+- name: updateFTC
+  hosts: FTC,!DVS*PRX*
+  serial: 5
+  any_errors_fatal: true
+  become: yes
+  vars:
+    apt_cache_valid_time: 3600
+    # Automatically restart services without interactive prompts (Ubuntu/Debian needrestart)
+    env_noninteractive:
+      DEBIAN_FRONTEND: noninteractive
+      APT_LISTCHANGES_FRONTEND: none
+      NEEDRESTART_MODE: a
+    # Retry settings to ride out transient apt/dpkg locks or mirror hiccups
+    retry_attempts: 5
+    retry_delay: 15
+    # Free space threshold on /var (MB) before proceeding
+    min_var_mb: 500
+  environment: "{{ env_noninteractive }}"
+
+  pre_tasks:
+    - name: Ensure Debian-family only
+      ansible.builtin.assert:
+        that:
+          - ansible_os_family == "Debian"
+        fail_msg: "This play is intended for Debian/Ubuntu only."
+
+    - name: Check free space on /var
+      ansible.builtin.command: bash -lc "df -Pm /var | awk 'NR==2{print $4}'"
+      register: var_free
+      changed_when: false
+
+    - name: Abort if not enough free space in /var
+      ansible.builtin.assert:
+        that:
+          - var_free.stdout | int >= min_var_mb
+        fail_msg: "Not enough free space in /var (need {{ min_var_mb }}MB)."
+
+    - name: Refresh APT cache (with retries)
+      ansible.builtin.apt:
+        update_cache: yes
+        cache_valid_time: "{{ apt_cache_valid_time }}"
+      register: apt_update_result
+      retries: "{{ retry_attempts }}"
+      delay: "{{ retry_delay }}"
+      until: apt_update_result is succeeded
+
+    - name: Gather packages facts (for reporting)
+      ansible.builtin.package_facts:
+        manager: apt
+
+  tasks:
+    - name: Standard upgrade (apt-get upgrade) with retries
+      ansible.builtin.apt:
+        upgrade: yes
+      register: upgrade_std
+      retries: "{{ retry_attempts }}"
+      delay: "{{ retry_delay }}"
+      until: upgrade_std is succeeded
+
+    - name: Full dist-upgrade (apt-get dist-upgrade) with retries
+      ansible.builtin.apt:
+        upgrade: dist
+      register: upgrade_dist
+      retries: "{{ retry_attempts }}"
+      delay: "{{ retry_delay }}"
+      until: upgrade_dist is succeeded
+
+    - name: Autoremove unused packages
+      ansible.builtin.apt:
+        autoremove: yes
+
+    - name: Autoclean local package cache
+      ansible.builtin.apt:
+        autoclean: yes
+
+    - name: Check if reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_flag
+
+    - name: Reboot if required
+      ansible.builtin.reboot:
+        msg: "Rebooting after kernel/libc/critical updates"
+        reboot_timeout: 1200
+      when: reboot_flag.stat.exists
+
+  post_tasks:
+    - name: Write simple upgrade report
+      ansible.builtin.copy:
+        dest: "/var/log/ansible-apt-upgrade-{{ ansible_date_time.iso8601_basic }}.log"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          Host: {{ inventory_hostname }}
+          Time: {{ ansible_date_time.iso8601 }}
+          Standard upgrade changed: {{ upgrade_std is changed }}
+          Dist upgrade changed:     {{ upgrade_dist is changed }}
+          Packages (pre) count:     {{ ansible_facts.packages | length if ansible_facts.packages is defined else 'n/a' }}
+          Reboot required:          {{ reboot_flag.stat.exists | default(false) }}
+
+# ===== Second group =====
+- name: updateWTC
+  hosts: WTC,!DVS*PRX*,!SD90*PRX*
+  serial: 8
+  strategy: free
+  any_errors_fatal: true
+  become: yes
+  vars:
+    apt_cache_valid_time: 3600
+    env_noninteractive:
+      DEBIAN_FRONTEND: noninteractive
+      APT_LISTCHANGES_FRONTEND: none
+      NEEDRESTART_MODE: a
+    retry_attempts: 5
+    retry_delay: 15
+    min_var_mb: 500
+  environment: "{{ env_noninteractive }}"
+
+  pre_tasks:
+    - name: Ensure Debian-family only
+      ansible.builtin.assert:
+        that: ansible_os_family == "Debian"
+        fail_msg: "This play is intended for Debian/Ubuntu only."
+
+    - name: Refresh APT cache (with retries)
+      ansible.builtin.apt:
+        update_cache: yes
+        cache_valid_time: "{{ apt_cache_valid_time }}"
+      register: apt_update_result
+      retries: "{{ retry_attempts }}"
+      delay: "{{ retry_delay }}"
+      until: apt_update_result is succeeded
+
+  tasks:
+    - name: Standard upgrade (apt-get upgrade)
+      ansible.builtin.apt:
+        upgrade: yes
+      register: upgrade_std
+      retries: "{{ retry_attempts }}"
+      delay: "{{ retry_delay }}"
+      until: upgrade_std is succeeded
+
+    - name: Full dist-upgrade (apt-get dist-upgrade)
+      ansible.builtin.apt:
+        upgrade: dist
+      register: upgrade_dist
+      retries: "{{ retry_attempts }}"
+      delay: "{{ retry_delay }}"
+      until: upgrade_dist is succeeded
+
+    - name: Autoremove unused packages
+      ansible.builtin.apt:
+        autoremove: yes
+
+    - name: Autoclean local package cache
+      ansible.builtin.apt:
+        autoclean: yes
+
+    - name: Check if reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_flag
+
+    - name: Reboot if required
+      ansible.builtin.reboot:
+        msg: "Rebooting after updates"
+        reboot_timeout: 1200
+      when: reboot_flag.stat.exists
+
+# ===== Proxies (often critical path; keep tighter serial) =====
+- name: Update proxys
+  hosts: DVS*PRX*,SD90*PRX*
+  serial: 2
+  any_errors_fatal: true
+  become: yes
+  vars:
+    apt_cache_valid_time: 1800
+    env_noninteractive:
+      DEBIAN_FRONTEND: noninteractive
+      APT_LISTCHANGES_FRONTEND: none
+      NEEDRESTART_MODE: a
+    retry_attempts: 6
+    retry_delay: 20
+    min_var_mb: 800 # proxies can cache a lot; ask for more headroom
+  environment: "{{ env_noninteractive }}"
+
+  pre_tasks:
+    - name: Ensure Debian-family only
+      ansible.builtin.assert:
+        that: ansible_os_family == "Debian"
+        fail_msg: "This play is intended for Debian/Ubuntu only."
+
+    - name: Refresh APT cache (with retries)
+      ansible.builtin.apt:
+        update_cache: yes
+        cache_valid_time: "{{ apt_cache_valid_time }}"
+      register: apt_update_result
+      retries: "{{ retry_attempts }}"
+      delay: "{{ retry_delay }}"
+      until: apt_update_result is succeeded
+
+  tasks:
+    - name: Standard upgrade (apt-get upgrade)
+      ansible.builtin.apt:
+        upgrade: yes
+      register: upgrade_std
+      retries: "{{ retry_attempts }}"
+      delay: "{{ retry_delay }}"
+      until: upgrade_std is succeeded
+
+    - name: Full dist-upgrade (apt-get dist-upgrade)
+      ansible.builtin.apt:
+        upgrade: dist
+      register: upgrade_dist
+      retries: "{{ retry_attempts }}"
+      delay: "{{ retry_delay }}"
+      until: upgrade_dist is succeeded
+
+    - name: Autoremove unused packages
+      ansible.builtin.apt:
+        autoremove: yes
+
+    - name: Autoclean local package cache
+      ansible.builtin.apt:
+        autoclean: yes
+
+    - name: Check if reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_flag
+
+    - name: Reboot if required
+      ansible.builtin.reboot:
+        msg: "Rebooting proxies after updates"
+        reboot_timeout: 1500
+      when: reboot_flag.stat.exists
