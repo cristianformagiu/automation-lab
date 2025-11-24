@@ -1,5 +1,5 @@
 ---
-- name: Fix CVE-2025-62168 by upgrading Squid to 7.2
+- name: Upgrade Squid to 7.2 on DVSFTCPRX01 (fix CVE-2025-62168)
   hosts: DVSFTCPRX01
   become: true
   gather_facts: true
@@ -7,33 +7,36 @@
   vars:
     target_ver: "7.2"
 
-    # Diladele repo (Ubuntu 24.04 noble only)
+    # If host is noble, use Diladele repo
     diladele_key_url: "https://packages.diladele.com/diladele_pub.asc"
     diladele_repo: "deb https://squid72.diladele.com/ubuntu/ noble main"
     diladele_list: "/etc/apt/sources.list.d/squid72.diladele.com.list"
 
     # Build fallback (for non-noble)
-    squid_pkg_rev: "1" # adjust if Debian revision differs
+    squid_pkg_rev: "1" # change if Debian revision differs (e.g. 7.2-2)
     squid_pkg: "{{ target_ver }}-{{ squid_pkg_rev }}"
     build_dir: /usr/local/src/squid-build
     build_user: squidbuild
     debian_pool: "https://deb.debian.org/debian/pool/main/s/squid"
 
+    # FIX for your error: use user-owned remote tmp
+    ansible_remote_tmp: "/home/{{ build_user }}/.ansible/tmp"
+
   tasks:
-    - name: Current squid version
+    - name: Current squid version (if installed)
       ansible.builtin.shell: "squid -v | head -n1 | awk '{print $NF}' || true"
       register: cur_ver
       changed_when: false
 
-    - name: Stop if already fixed
+    - name: End host if already target version
       ansible.builtin.meta: end_host
       when: cur_ver.stdout == target_ver
 
-    - name: Branch by Ubuntu codename
+    - name: Detect noble
       ansible.builtin.set_fact:
         is_noble: "{{ ansible_distribution == 'Ubuntu' and ansible_distribution_release == 'noble' }}"
 
-    # ===== Noble path: use Diladele repo =====
+    # ===================== Noble path =====================
     - name: Add Diladele apt key (noble)
       ansible.builtin.apt_key:
         url: "{{ diladele_key_url }}"
@@ -57,7 +60,7 @@
         state: latest
       when: is_noble
 
-    # ===== Non-noble path: build + install =====
+    # ===================== Non-noble path =====================
     - name: Install build deps (non-noble)
       ansible.builtin.apt:
         update_cache: true
@@ -96,13 +99,29 @@
         state: present
       when: not is_noble
 
-    - name: Prepare build dir (non-noble)
+    - name: Ensure remote tmp for become_user works (non-noble)
+      ansible.builtin.file:
+        path: "/home/{{ build_user }}/.ansible/tmp"
+        state: directory
+        owner: "{{ build_user }}"
+        group: "{{ build_user }}"
+        mode: "0700"
+      when: not is_noble
+
+    - name: Prepare build directory (non-noble)
       ansible.builtin.file:
         path: "{{ build_dir }}"
         state: directory
         owner: "{{ build_user }}"
         group: "{{ build_user }}"
         mode: "0755"
+      when: not is_noble
+
+    - name: Stop squid before upgrade (non-noble)
+      ansible.builtin.service:
+        name: squid
+        state: stopped
+      ignore_errors: true
       when: not is_noble
 
     - name: Download Debian Squid 7.2 source (non-noble)
@@ -115,7 +134,8 @@
         wget -q "{{ debian_pool }}/squid_{{ squid_pkg }}.dsc"
         wget -q "{{ debian_pool }}/squid_{{ target_ver }}.orig.tar.xz"
         wget -q "{{ debian_pool }}/squid_{{ squid_pkg }}.debian.tar.xz"
-      args: { executable: /bin/bash }
+      args:
+        executable: /bin/bash
       when: not is_noble
 
     - name: Unpack source (non-noble)
@@ -124,34 +144,38 @@
         set -e
         cd "{{ build_dir }}/build"
         dpkg-source -x "squid_{{ squid_pkg }}.dsc"
-      args: { executable: /bin/bash }
+      args:
+        executable: /bin/bash
       when: not is_noble
 
-    - name: Build .debs (non-noble)
+    - name: Build .deb packages (non-noble)
       become_user: "{{ build_user }}"
       ansible.builtin.shell: |
         set -e
         cd "{{ build_dir }}/build/squid-{{ target_ver }}"
         dpkg-buildpackage -rfakeroot -b -us -uc
-      args: { executable: /bin/bash }
+      args:
+        executable: /bin/bash
       when: not is_noble
 
-    - name: Install upgraded Squid (non-noble)
+    - name: Install Squid 7.2 over 5.9 (non-noble)
       ansible.builtin.shell: |
         set -e
         cd "{{ build_dir }}/build"
         dpkg -i squid-common_{{ squid_pkg }}_all.deb
         dpkg -i squid_{{ squid_pkg }}_amd64.deb || apt-get -f -y install
-      args: { executable: /bin/bash }
+      args:
+        executable: /bin/bash
       when: not is_noble
 
+    # ===================== Common finish =====================
     - name: Restart squid
       ansible.builtin.service:
         name: squid
         state: restarted
         enabled: true
 
-    - name: Verify version
+    - name: Verify installed version
       ansible.builtin.command: squid -v
       register: vout
       changed_when: false
