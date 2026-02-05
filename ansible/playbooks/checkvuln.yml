@@ -8,10 +8,6 @@
     proxy_ports: [3128, 8080, 8000]
     apache_pkgs: ["apache2", "httpd"]
     squid_pkgs: ["squid", "squid3", "squid-openssl"]
-    key_files:
-      - /etc/os-release
-      - /etc/apt/sources.list
-      - /etc/apt/sources.list.d
 
   tasks:
     - name: Ensure target is Linux
@@ -34,7 +30,7 @@
       changed_when: false
       failed_when: false
 
-    - name: APT update (dry check via cache update output)
+    - name: APT update (read-only; refresh cache)
       ansible.builtin.command: apt-get update -o Debug::NoLocking=true
       register: apt_update
       changed_when: false
@@ -43,6 +39,16 @@
     - name: List upgradable packages (APT)
       ansible.builtin.command: apt list --upgradable
       register: apt_upgradable
+      changed_when: false
+      failed_when: false
+
+    - name: Count upgradable packages (simulation; more reliable)
+      ansible.builtin.shell: |
+        set -o pipefail
+        apt-get -s upgrade | awk '/^Inst /{c++} END{print c+0}'
+      args:
+        executable: /bin/bash
+      register: upg_count
       changed_when: false
       failed_when: false
 
@@ -157,41 +163,18 @@
       changed_when: false
       failed_when: false
 
-    - name: Quick check - proxy ports exposed on non-loopback
-      ansible.builtin.shell: |
-        set -o pipefail
-        ss -tulpen | awk '
-          /LISTEN/ {
-            # local address is field 5 like 0.0.0.0:3128 or [::]:3128
-            la=$5
-            # match any proxy port
-            for (p in ports) {}
-          }
-        ' || true
-      vars:
-        # note: this task intentionally does not hard-fail; use the listening table above as source of truth
-        ports: "{{ proxy_ports }}"
-      args:
-        executable: /bin/bash
-      register: proxy_exposure_hint
-      changed_when: false
-      failed_when: false
-
     - name: Summarize key outputs
       ansible.builtin.debug:
         msg:
           host: "{{ inventory_hostname }}"
-          os_release: "{{ os_release.stdout | default('') }}"
+          os_pretty_name: "{{ (os_release.stdout | default('')) | regex_search('^PRETTY_NAME=.*$', multiline=True) | default('') }}"
           uname: "{{ uname_out.stdout | default('') }}"
-          upgradable_count_hint: >-
-            {{
-              (apt_upgradable.stdout_lines | default([]))
-              | select('match','^.+/.+\\s+.+\\s+\\[upgradable') | list | length
-            }}
+          apt_simulated_upgradable_count: "{{ upg_count.stdout | default('0') }}"
           held_packages: "{{ apt_holds.stdout_lines | default([]) }}"
           openssl: "{{ openssl_ver.stdout | default('') }}"
           python3: "{{ py3_ver.stdout | default('') }}"
           squid_installed_pkgs: "{{ squid_pkgs_installed.stdout_lines | default([]) }}"
+          squid_running_processes: "{{ squid_ps.stdout_lines | default([]) }}"
           squid_version: "{{ squid_ver.stdout | default('') }}"
           squid_conf_exists: "{{ squid_conf.stat.exists | default(false) }}"
           apache_installed_pkgs: "{{ apache_pkgs_installed.stdout_lines | default([]) }}"
