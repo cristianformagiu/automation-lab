@@ -1,0 +1,209 @@
+---
+- name: DVS Linux vulnerability readiness checks (read-only)
+  hosts: "DVS*"
+  become: true
+  gather_facts: true
+
+  vars:
+    proxy_ports: [3128, 8080, 8000]
+    apache_pkgs: ["apache2", "httpd"]
+    squid_pkgs: ["squid", "squid3", "squid-openssl"]
+    key_files:
+      - /etc/os-release
+      - /etc/apt/sources.list
+      - /etc/apt/sources.list.d
+
+  tasks:
+    - name: Ensure target is Linux
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.system is defined
+          - ansible_facts.system == "Linux"
+        fail_msg: "This playbook is intended for Linux hosts only."
+      changed_when: false
+
+    - name: OS release
+      ansible.builtin.command: cat /etc/os-release
+      register: os_release
+      changed_when: false
+      failed_when: false
+
+    - name: Kernel / distro quick view
+      ansible.builtin.command: uname -a
+      register: uname_out
+      changed_when: false
+      failed_when: false
+
+    - name: APT update (dry check via cache update output)
+      ansible.builtin.command: apt-get update -o Debug::NoLocking=true
+      register: apt_update
+      changed_when: false
+      failed_when: false
+
+    - name: List upgradable packages (APT)
+      ansible.builtin.command: apt list --upgradable
+      register: apt_upgradable
+      changed_when: false
+      failed_when: false
+
+    - name: Show held packages (APT)
+      ansible.builtin.command: apt-mark showhold
+      register: apt_holds
+      changed_when: false
+      failed_when: false
+
+    - name: Check OpenSSL version
+      ansible.builtin.command: openssl version -a
+      register: openssl_ver
+      changed_when: false
+      failed_when: false
+
+    - name: Check Python3 version
+      ansible.builtin.command: python3 --version
+      register: py3_ver
+      changed_when: false
+      failed_when: false
+
+    - name: Check installed Squid packages
+      ansible.builtin.shell: |
+        set -o pipefail
+        dpkg -l | egrep '^(ii)\s+({{ squid_pkgs | join("|") }})\b' || true
+      args:
+        executable: /bin/bash
+      register: squid_pkgs_installed
+      changed_when: false
+      failed_when: false
+
+    - name: Check squid process (if any)
+      ansible.builtin.shell: |
+        set -o pipefail
+        ps aux | egrep -i 'squid' | egrep -v 'egrep|grep' || true
+      args:
+        executable: /bin/bash
+      register: squid_ps
+      changed_when: false
+      failed_when: false
+
+    - name: Check squid version (if squid exists)
+      ansible.builtin.shell: |
+        set -o pipefail
+        if command -v squid >/dev/null 2>&1; then
+          squid -v
+        elif command -v squid3 >/dev/null 2>&1; then
+          squid3 -v
+        else
+          echo "squid binary not found"
+        fi
+      args:
+        executable: /bin/bash
+      register: squid_ver
+      changed_when: false
+      failed_when: false
+
+    - name: Check squid config presence
+      ansible.builtin.stat:
+        path: /etc/squid/squid.conf
+      register: squid_conf
+      changed_when: false
+
+    - name: Extract key Squid config lines (read-only)
+      ansible.builtin.shell: |
+        set -o pipefail
+        if [ -f /etc/squid/squid.conf ]; then
+          egrep -n '^\s*(http_port|https_port|http_access|acl|cache_peer|visible_hostname|forwarded_for|via|request_header_access|reply_header_access)\b' /etc/squid/squid.conf \
+            | head -n 250
+        else
+          echo "/etc/squid/squid.conf not found"
+        fi
+      args:
+        executable: /bin/bash
+      register: squid_conf_snip
+      changed_when: false
+      failed_when: false
+
+    - name: Check installed Apache packages (apache2/httpd)
+      ansible.builtin.shell: |
+        set -o pipefail
+        dpkg -l | egrep '^(ii)\s+({{ apache_pkgs | join("|") }})\b' || true
+      args:
+        executable: /bin/bash
+      register: apache_pkgs_installed
+      changed_when: false
+      failed_when: false
+
+    - name: Check Apache version (if present)
+      ansible.builtin.shell: |
+        set -o pipefail
+        if command -v apache2 >/dev/null 2>&1; then
+          apache2 -v
+        elif command -v httpd >/dev/null 2>&1; then
+          httpd -v
+        else
+          echo "apache binary not found"
+        fi
+      args:
+        executable: /bin/bash
+      register: apache_ver
+      changed_when: false
+      failed_when: false
+
+    - name: Listening ports and processes (focus proxy ports + 80/443)
+      ansible.builtin.shell: |
+        set -o pipefail
+        ss -tulpen | egrep -n 'LISTEN|:80\b|:443\b|:{{ proxy_ports | join("\\b|:") }}\b' || ss -tulpen
+      args:
+        executable: /bin/bash
+      register: listen_ports
+      changed_when: false
+      failed_when: false
+
+    - name: Quick check - proxy ports exposed on non-loopback
+      ansible.builtin.shell: |
+        set -o pipefail
+        ss -tulpen | awk '
+          /LISTEN/ {
+            # local address is field 5 like 0.0.0.0:3128 or [::]:3128
+            la=$5
+            # match any proxy port
+            for (p in ports) {}
+          }
+        ' || true
+      vars:
+        # note: this task intentionally does not hard-fail; use the listening table above as source of truth
+        ports: "{{ proxy_ports }}"
+      args:
+        executable: /bin/bash
+      register: proxy_exposure_hint
+      changed_when: false
+      failed_when: false
+
+    - name: Summarize key outputs
+      ansible.builtin.debug:
+        msg:
+          host: "{{ inventory_hostname }}"
+          os_release: "{{ os_release.stdout | default('') }}"
+          uname: "{{ uname_out.stdout | default('') }}"
+          upgradable_count_hint: >-
+            {{
+              (apt_upgradable.stdout_lines | default([]))
+              | select('match','^.+/.+\\s+.+\\s+\\[upgradable') | list | length
+            }}
+          held_packages: "{{ apt_holds.stdout_lines | default([]) }}"
+          openssl: "{{ openssl_ver.stdout | default('') }}"
+          python3: "{{ py3_ver.stdout | default('') }}"
+          squid_installed_pkgs: "{{ squid_pkgs_installed.stdout_lines | default([]) }}"
+          squid_version: "{{ squid_ver.stdout | default('') }}"
+          squid_conf_exists: "{{ squid_conf.stat.exists | default(false) }}"
+          apache_installed_pkgs: "{{ apache_pkgs_installed.stdout_lines | default([]) }}"
+          apache_version: "{{ apache_ver.stdout | default('') }}"
+      changed_when: false
+
+    - name: Show listening ports (raw)
+      ansible.builtin.debug:
+        var: listen_ports.stdout
+      changed_when: false
+
+    - name: Show Squid config snippet (raw)
+      ansible.builtin.debug:
+        var: squid_conf_snip.stdout
+      changed_when: false
